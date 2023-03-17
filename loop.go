@@ -121,25 +121,29 @@ func (l *Loop) signalDone() {
 	l.runOnce.Do(func() { close(l.doneSignal) })
 }
 
-// Start initiates a game loop. This call does not block.
+// Start initiates a game loop. This call block.
 // To stop the loop, close the done chan.
 // To get notified before Simulate or Render are called, pull items from
 // the heartbeat channel.
 // If either Render or Simulate throw an error, the error will be made available
 // on the output error channel and the loop will stop.
 func (l *Loop) Start() error {
+	startInit := func() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	var wg sync.WaitGroup
-	wg.Add(1)
 	// Silently fail on re-starts.
 	if l.curState != stateInit {
 		return wrapLoopError(nil, TokenLoop, "Loop is already running or is done")
 	}
 	l.curState = stateRun
+		return nil
+	}
+	err := startInit()
+	if err != nil {
+		return err
+	}
 
-	go func() {
 		// Stats heartbeat channel set up
 		heartTick := time.NewTicker(time.Second)
 		sendBeat := func(ps LatencySample) {
@@ -170,15 +174,13 @@ func (l *Loop) Start() error {
 		rendLatency := newLatencyTracker()
 		previousRend := now
 
-		wg.Done()
-
 		for {
 			select {
 			case <-l.doneSignal:
-				break
+			return nil
 			case <-l.done:
 				l.signalDone()
-				break
+			return nil
 			case <-heartTick.C:
 				sendBeat(LatencySample{
 					RenderLatency:   rendLatency.Latency(),
@@ -199,7 +201,7 @@ func (l *Loop) Start() error {
 						wrapped := wrapLoopError(er, TokenSimulate, "Error returned by Simulate(%s)", l.SimulationLatency.String())
 						wrapped.Misc["curTime"] = curTime
 						l.Stop(wrapped)
-						break
+					return nil
 					}
 
 					simLatency.MarkDone(l.SimulationLatency)
@@ -222,14 +224,10 @@ func (l *Loop) Start() error {
 					wrapped := wrapLoopError(er, TokenRender, "Error returned by Render(%s)", frameTime.String())
 					wrapped.Misc["curTime"] = curTime
 					l.Stop(wrapped)
-					break
+				return nil
 				}
 
 				rendLatency.MarkDone(frameTime)
 			}
 		}
-	}()
-	// Don't return until timer loop goroutine is actually starting.
-	wg.Wait()
-	return nil
 }
